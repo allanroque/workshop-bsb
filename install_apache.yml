@@ -1,14 +1,94 @@
 ---
-- name: Instalar e configurar o apache
+# Playbook: instalação e configuração básica do Apache (httpd) em RHEL/CentOS/Fedora.
+# Uso: ansible-playbook -i inventário install_apache.yml
+#
+- name: Instalar e configurar o Apache HTTP Server
   hosts: apache
   become: true
+
+  vars:
+    # Pacotes (família Red Hat: httpd; Debian/Ubuntu seria apache2)
+    apache_packages:
+      - httpd
+      - mod_ssl
+    apache_service: httpd
+    apache_docroot: /var/www/html
+    apache_user: apache
+    apache_group: apache
+    # Liberar HTTP/HTTPS no firewalld quando o serviço estiver ativo
+    apache_open_firewalld: true
+
+  pre_tasks:
+    - name: Coletar fatos de serviços (firewalld, etc.)
+      ansible.builtin.service_facts:
+
   tasks:
-    - name: instalar pacote httpd
-      package:
-        name: httpd
+    - name: Instalar pacotes do Apache e SSL
+      ansible.builtin.package:
+        name: "{{ apache_packages }}"
         state: present
 
-    - name: start do servico
-      service:
-        name: httpd
+    - name: Garantir diretório do document root
+      ansible.builtin.file:
+        path: "{{ apache_docroot }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Criar página inicial de teste
+      ansible.builtin.copy:
+        dest: "{{ apache_docroot }}/index.html"
+        owner: "{{ apache_user }}"
+        group: "{{ apache_group }}"
+        mode: "0644"
+        content: |
+          <!DOCTYPE html>
+          <html lang="pt-BR">
+          <head>
+            <meta charset="utf-8">
+            <title>Apache — Ansible</title>
+          </head>
+          <body>
+            <h1>Servidor Apache em execução</h1>
+            <p>Configurado com Ansible.</p>
+          </body>
+          </html>
+
+    - name: Habilitar e iniciar o serviço Apache
+      ansible.builtin.service:
+        name: "{{ apache_service }}"
         state: started
+        enabled: true
+
+    - name: Liberar HTTP e HTTPS no firewalld (permanente)
+      ansible.builtin.command:
+        cmd: firewall-cmd --permanent --add-service=http --add-service=https
+      register: _firewalld_add
+      changed_when: "'ALREADY_ENABLED' not in (_firewalld_add.stderr | default(''))"
+      when:
+        - apache_open_firewalld | bool
+        - ansible_facts.services['firewalld.service'] is defined
+        - ansible_facts.services['firewalld.service'].state == 'running'
+      notify: Recarregar firewalld
+
+  handlers:
+    - name: Recarregar firewalld
+      ansible.builtin.command:
+        cmd: firewall-cmd --reload
+      changed_when: true
+      when:
+        - ansible_facts.services['firewalld.service'] is defined
+        - ansible_facts.services['firewalld.service'].state == 'running'
+
+  post_tasks:
+    - name: Verificar resposta HTTP local
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/"
+        method: GET
+        status_code: 200
+        return_content: false
+      register: _http_check
+      retries: 5
+      delay: 2
+      until: _http_check.status == 200
