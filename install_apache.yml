@@ -1,0 +1,14 @@
+---
+- name: Instalar e configurar o apache
+  hosts: apache
+  become: true
+  tasks:
+    - name: instalar pacote httpd
+      package:
+        name: httpd
+        state: present
+
+    - name: start do servico
+      service:
+        name: httpd
+        state: started
